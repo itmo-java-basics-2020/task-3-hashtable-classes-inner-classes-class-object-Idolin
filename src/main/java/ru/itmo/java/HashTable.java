@@ -10,33 +10,34 @@ public class HashTable<K, V>
     private int size;
     private int maxIndex;
     private int threshold;
-    private double loadFactor;
+    private final double loadFactor;
     private Entry<K, V>[] table;
 
     public HashTable(int capacity, double loadFactor) {
         size = 0;
         this.loadFactor = loadFactor;
-        if (capacity <= 0)
+        if (capacity <= 0) {
             throw new IllegalArgumentException("Capacity must be greater then 0");
-        if (capacity > (1 << 30))
-            throw new IllegalArgumentException("Max capacity supported is 2^30");
-        if (loadFactor <= 0 || loadFactor > 1)
-            throw new IllegalArgumentException("loadFactor must be in range (0, 1]");
-        maxIndex = 4;
-        while (maxIndex < capacity) {
-            maxIndex *= 2;
         }
+        int MAX_ARRAY_SIZE = (int) Math.pow(2, 30);
+        if (capacity > MAX_ARRAY_SIZE) {
+            throw new IllegalArgumentException("Max capacity supported is 2 ^ 30");
+        }
+        if (loadFactor <= 0 || loadFactor > 1) {
+            throw new IllegalArgumentException("loadFactor must be in range (0, 1]");
+        }
+        maxIndex = max(upToClosestPowerOf2(capacity), 4);
         table = createArray(maxIndex + 1); // last element of array is always null
-        threshold = max((int) (loadFactor * maxIndex), 1);
-        --maxIndex; // maxIndex = 2 ^ x - 1
+        --maxIndex; // maxIndex = capacity - 1 = 2 ^ x - 1
+        threshold = max((int) (loadFactor * maxIndex), 1); // at least one place is always free
     }
 
     public HashTable(int capacity) {
-        this(capacity, 0.7f);
+        this(capacity, 0.7f); // default load factor = 0.7
     }
 
     public HashTable() {
-        this(65536);
+        this(32); // default initial capacity = 32
     }
 
     @Override
@@ -52,7 +53,7 @@ public class HashTable<K, V>
     public V get(Object key) {
         Entry<?, ?> entry = new Entry<>(key);
         int position = getPosition(entry);
-        return (position >= 0) ? (table[position]).getValue() : null;
+        return (position >= 0) ? table[position].getValue() : null;
     }
 
     @Override
@@ -69,20 +70,9 @@ public class HashTable<K, V>
         int shiftToPosition = position;
 
         while (true) {
-            int entrySignedPosition;
             if (table[++position] == null) {
                 if (position > maxIndex) {
-                    for (position = 0; ; position++) {
-                        if (table[position] == null) {
-                            break;
-                        }
-                        entrySignedPosition = table[position].getSignedPosition(maxIndex);
-                        if (entrySignedPosition < 0 && (entrySignedPosition & Integer.MAX_VALUE) <= shiftToPosition) {
-                            table[shiftToPosition] = table[position].setSignPlus();
-                            shiftToPosition = position;
-                            break;
-                        }
-                    }
+                    position = 0;
                 }
                 if (table[position] == null) {
                     table[shiftToPosition] = null;
@@ -90,8 +80,11 @@ public class HashTable<K, V>
                 }
             }
 
-            entrySignedPosition = table[position].getSignedPosition(maxIndex);
-            if (entrySignedPosition <= shiftToPosition) {
+            // shift deletion algorithm
+            int entryPosition = table[position].getPosition(maxIndex);
+            if ((position < shiftToPosition) ?
+                    (position < entryPosition && entryPosition <= shiftToPosition) :
+                    (position < entryPosition || entryPosition <= shiftToPosition)) {
                 table[shiftToPosition] = table[position];
                 shiftToPosition = position;
             }
@@ -185,7 +178,7 @@ public class HashTable<K, V>
                     position = 0;
                     continue;
                 }
-                return -1;
+                return Integer.MIN_VALUE | position; // returns position with sign bit set if key is not in hashtable
             } else {
                 if (entry.equals(table[position])) {
                     return position;
@@ -196,45 +189,35 @@ public class HashTable<K, V>
     }
 
     private V putEntry(Entry<K, V> entry) {
-        int hashPosition = entry.getPosition(maxIndex);
-        int position = hashPosition;
-        while (true) {
-            if (table[position] != null) {
-                if (entry.equals(table[position])) {
-                    --size;
-                    return (table[position]).setValue(entry.getValue());
-                }
-                ++position;
-            } else {
-                if (position > maxIndex) {
-                    position = 0;
-                } else {
-                    if (position < hashPosition) {
-                        entry.setSignMinus();
-                    }
-                    table[position] = entry;
-                    return null;
-                }
-            }
+        int position = getPosition(entry);
+        if (position >= 0) {
+            --size;
+            return table[position].setValue(entry.getValue());
         }
+        position = Integer.MAX_VALUE & position; // getting actual first free place
+        table[position] = entry;
+        return null;
     }
 
     private void resize() {
         int oldCapacity = maxIndex + 1;
+
+        // overflow-conscious code
         maxIndex = (oldCapacity << 1);
         if (maxIndex < 0) {
+            // keep running with max capacity
             maxIndex = oldCapacity - 1;
             return;
         }
 
         Entry<K, V>[] oldTable = table;
-        table = createArray(maxIndex + 1);
-        threshold = max((int) (loadFactor * maxIndex), 1);
-        --maxIndex;
+        table = createArray(maxIndex + 1); // last element of array is always null
+        --maxIndex; // maxIndex = capacity - 1 = 2 ^ x - 1
+        threshold = max((int) (loadFactor * maxIndex), 1); // at least one place is always free
 
         for (int i = 0; i < oldCapacity; i++) {
             if (oldTable[i] != null) {
-                putEntry(oldTable[i].setSignPlus());
+                putEntry(oldTable[i]);
             }
         }
     }
@@ -244,18 +227,23 @@ public class HashTable<K, V>
         return (Entry<K, V>[]) Entry.createArray(length);
     }
 
+    private static int upToClosestPowerOf2(int value) {
+        int pow2 = 1;
+        while (pow2 < value) {
+            pow2 *= 2;
+        }
+        return pow2;
+    }
+
     private static class Entry<K, V> implements Map.Entry<K, V> {
         final int hash;
         final K key;
-
         V value;
-        int overEnd;
 
         protected Entry(K key, V value) {
             hash = key.hashCode();
             this.key = key;
             this.value = value;
-            overEnd = 0;
         }
 
         protected Entry(K key) {
@@ -280,20 +268,11 @@ public class HashTable<K, V>
         }
 
         public int getPosition(int maxIndex) {
+            /* maxIndex equals to capacity - 1 and capacity equals to the power of 2
+             * thus maxIndex can serve as a bit mask, which cuts off the left part of the hash
+             * the remaining bits of the hash then represents the initial computed position of the entry
+             */
             return maxIndex & hash;
-        }
-
-        public int getSignedPosition(int maxIndex) {
-            return overEnd | getPosition(maxIndex);
-        }
-
-        protected Entry<K, V> setSignPlus() {
-            overEnd = 0;
-            return this;
-        }
-
-        protected void setSignMinus() {
-            overEnd = Integer.MIN_VALUE;
         }
 
         boolean equals(Entry<?, ?> entry) {
