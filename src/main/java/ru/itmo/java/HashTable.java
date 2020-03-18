@@ -180,7 +180,7 @@ public class HashTable<K, V>
                 }
                 return Integer.MIN_VALUE | position; // returns position with sign bit set if key is not in hashtable
             } else {
-                if (entry.equals(table[position])) {
+                if (entry.keyEquals(table[position])) {
                     return position;
                 }
                 ++position;
@@ -275,7 +275,7 @@ public class HashTable<K, V>
             return maxIndex & hash;
         }
 
-        boolean equals(Entry<?, ?> entry) {
+        boolean keyEquals(Entry<?, ?> entry) {
             return (hash == entry.hash) && key.equals(entry.key);
         }
 
